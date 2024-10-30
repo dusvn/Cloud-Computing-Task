@@ -11,7 +11,9 @@ Break down to this solution and how it's works.<br/>
   -Contact Bank and BookStore microservices to be sure user have correct amount of money,for books and also contact book store to be sure about number of available books at this moment.<br/>
   -There is tiny trick to make consistent state in our small system.We have one dictionary for books and also one for users to make lock on this item until purchase process ends.<br>
   -After transaction sytem will unlock item for other users.<br>
-  -In prepare method system check is all conditions satisfied and if not then system do roll back.
+  -In prepare method system check is all conditions satisfied and if not then system do roll back.<br/>
+  -Why we need to implement this in our system?<br/>
+  -Service fabric provides to make more independent calls of functions but greath to know is service fabric don't take care about our data.Like classic platform as as service we need to take care about data and how it will bi processed.<br/>
   3.2 Second Phase<br/>
   -Commit<br/>
   -Take money from user for this amount of books and also change quantity of book store.<br/><br/> 
