@@ -19,9 +19,8 @@ namespace Client.Controllers
         [HttpPost]
         public async Task<IActionResult> Purchase([FromBody]Purchase p)
         {
-            bool res = await ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator")).TransferData(p);
-            if (res) return Ok();
-            else return BadRequest();
+            PurchaseResponse res = await ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator")).TransferData(p);
+            return StatusCode(res.StatusCode, res);
         }
         
     }
