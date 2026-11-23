@@ -24,17 +24,17 @@ namespace PurchaseOrchestrator
 
         public async Task<bool> TransferDataAndPurchase(Purchase p)
         {
-            // Bookstore partition is keyed by book, Bank partition by client.
-            var bookstore = ServiceProxy.Create<IBookstoreService>(BookstoreUri, PartitionHelper.GetPartitionKey(p.BookName));
-            double price = await bookstore.GetItemPrice(p.BookName);
+            // Bookstore partition is keyed by BookId, Bank partition by UserId.
+            var bookstore = ServiceProxy.Create<IBookstoreService>(BookstoreUri, PartitionHelper.GetPartitionKey(p.BookId));
+            double price = await bookstore.GetItemPrice(p.BookId);
             if (price <= 0.0) return false;
 
             p.AmountOfPurchase = price * p.Quantity;
             Guid txId = Guid.NewGuid();
             p.PurchaseId = txId;
 
-            var bookTx = ServiceProxy.Create<ITransaction>(BookstoreUri, PartitionHelper.GetPartitionKey(p.BookName));
-            var bankTx = ServiceProxy.Create<ITransaction>(BankUri, PartitionHelper.GetPartitionKey(p.Email));
+            var bookTx = ServiceProxy.Create<ITransaction>(BookstoreUri, PartitionHelper.GetPartitionKey(p.BookId));
+            var bankTx = ServiceProxy.Create<ITransaction>(BankUri, PartitionHelper.GetPartitionKey(p.UserId));
 
             if (await bankTx.PrepareAndLock(p, txId))
             {

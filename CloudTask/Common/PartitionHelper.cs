@@ -37,5 +37,10 @@ namespace Common
         }
 
         public static ServicePartitionKey GetPartitionKey(string key) => new ServicePartitionKey(GetPartitionLowKey(key));
+
+        // Guid ids (UserId / BookId): the lower-case canonical text form is hashed, so every service computes the same partition.
+        public static int GetPartitionIndex(Guid id) => GetPartitionIndex(id.ToString());
+
+        public static ServicePartitionKey GetPartitionKey(Guid id) => GetPartitionKey(id.ToString());
     }
 }

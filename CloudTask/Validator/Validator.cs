@@ -24,27 +24,24 @@ namespace Validator
             : base(context)
         { }
 
-        public async Task<bool> TransferData(Purchase p)
+        private readonly PurchaseValidator _purchaseValidator = new();
+
+        public async Task<PurchaseResponse> TransferData(Purchase p)
         {
-            bool validate = p != null &&
-                            !string.IsNullOrWhiteSpace(p.BookName) && p.BookName.Length <= 100 &&
-                            !string.IsNullOrWhiteSpace(p.FirstName) && p.FirstName.Length <= 50 &&
-                            !string.IsNullOrWhiteSpace(p.LastName) && p.LastName.Length <= 50 &&
-                            p.Quantity > 0 && p.Quantity <= 1000 &&
-                            CheckEmailPattern(p.Email);
-            bool purchase = false;
-            if (validate)
-            {
-                // route to the orchestrator partition owning this client (hash of userId = email)
-                purchase = await ServiceProxy.Create<IPurchaseOrchestrator>(new Uri("fabric:/CloudTask/PurchaseOrchestrator"), PartitionHelper.GetPartitionKey(p.Email.Trim())).TransferDataAndPurchase(p);
-            }
-            return validate && purchase; 
+            PurchaseResponse validation = _purchaseValidator.Validate(p);
+            if (!validation.IsAccepted) return validation;   // 400 with reason
+
+            bool purchased = await ForwardToOrchestratorAsync(p);
+            return purchased ? PurchaseResponse.Ok() : PurchaseResponse.Conflict();
         }
 
-        private bool CheckEmailPattern(string email)
+        private static Task<bool> ForwardToOrchestratorAsync(Purchase p)
         {
-            if (string.IsNullOrWhiteSpace(email) || email.Length > 254) return false;
-            return Regex.IsMatch(email.Trim(),@"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
+            // route to the orchestrator partition owning this client (hash of UserId)
+            var orchestrator = ServiceProxy.Create<IPurchaseOrchestrator>(
+                new Uri("fabric:/CloudTask/PurchaseOrchestrator"),
+                PartitionHelper.GetPartitionKey(p.UserId));
+            return orchestrator.TransferDataAndPurchase(p);
         }
 
 
@@ -56,27 +53,6 @@ namespace Validator
         protected override IEnumerable<ServiceInstanceListener> CreateServiceInstanceListeners()
         {
             return this.CreateServiceRemotingInstanceListeners();
-        }
-
-        /// <summary>
-        /// This is the main entry point for your service instance.
-        /// </summary>
-        /// <param name="cancellationToken">Canceled when Service Fabric needs to shut down this service instance.</param>
-        protected override async Task RunAsync(CancellationToken cancellationToken)
-        {
-            // TODO: Replace the following sample code with your own logic 
-            //       or remove this RunAsync override if it's not needed in your service.
-
-            long iterations = 0;
-
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                ServiceEventSource.Current.ServiceMessage(this.Context, "Working-{0}", ++iterations);
-
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            }
         }
     }
 }

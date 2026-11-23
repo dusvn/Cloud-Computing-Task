@@ -8,6 +8,7 @@ using Common;
 using Microsoft.ServiceFabric.Services.Remoting.Client;
 using Common.Interfaces;
 using Common.Models;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.ServiceFabric.Data;
 using Microsoft.ServiceFabric.Data.Collections;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
@@ -23,9 +24,23 @@ namespace BookstoreService
     /// </summary>
     internal sealed class BookstoreService : StatefulService,IService,ITransaction,IBookstoreService
     {
+        // Database connection owned by this service instance; available for any later query.
+        // DbContext is not thread-safe: use it from one flow at a time (or create short-lived contexts for concurrent calls).
+        private readonly BookstoreDbContext _db;
+
         public BookstoreService(StatefulServiceContext context)
             : base(context)
-        { }
+        {
+            _db = new BookstoreDbContext(DatabaseSettings.GetConnectionString(context));
+        }
+
+        protected override async Task OnCloseAsync(CancellationToken cancellationToken)
+        {
+            await _db.DisposeAsync();
+            await base.OnCloseAsync(cancellationToken);
+        }
+
+        protected override void OnAbort() => _db.Dispose();
 
         /// <summary>
         /// Optional override to create listeners (e.g., HTTP, Service Remoting, WCF, etc.) for this service replica to handle client or user requests.
@@ -40,21 +55,22 @@ namespace BookstoreService
         }
 
 
-        public async Task InitBooks()
+        private const int MaxBooksToLoad = 10;
+
+        /// <summary>Loads the first <see cref="MaxBooksToLoad"/> books from Postgres (public.books) into the reliable dictionary.</summary>
+        public async Task InitBooks(CancellationToken cancellationToken)
         {
-            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>("bookStore");
+            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Book>>("bookStore");
             int ownIndex = await PartitionHelper.GetOwnPartitionIndexAsync(this.Context);
-            var seed = new[]
-            {
-                new Book("Knjiga1", 10, 10.26), new Book("Knjiga2", 10, 26.10), new Book("Knjiga3", 10, 15.24),
-                new Book("Knjiga4", 10, 12.50), new Book("Knjiga5", 10, 8.99),  new Book("Knjiga6", 10, 19.90),
-                new Book("Knjiga7", 10, 22.00), new Book("Knjiga8", 10, 5.75),
-            };
+            List<Book> booksFromDatabase = await _db.Books
+                .AsNoTracking()
+                .Take(MaxBooksToLoad)
+                .ToListAsync(cancellationToken);
             using (var tx = this.StateManager.CreateTransaction())
             {
                 // each partition stores only the books whose hash(bookId) maps to it
-                foreach (var b in seed.Where(b => PartitionHelper.GetPartitionIndex(b.BookName) == ownIndex))
-                    await bookStore.TryAddAsync(tx, b.BookName, b);   // TryAdd: safe on failover/restart
+                foreach (var b in booksFromDatabase.Where(b => PartitionHelper.GetPartitionIndex(b.BookId) == ownIndex))
+                    await bookStore.TryAddAsync(tx, b.BookId, b);   // TryAdd: safe on failover/restart
                 await tx.CommitAsync();
             }
         }
@@ -66,7 +82,7 @@ namespace BookstoreService
         /// <param name="cancellationToken">Canceled when Service Fabric needs to shut down this service replica.</param>
         protected override async Task RunAsync(CancellationToken cancellationToken)
         {
-            await InitBooks();
+            await InitBooks(cancellationToken);
 
             // Outbox pump: sales are enqueued atomically with the stock update (see Commit);
             // here they are delivered to ReportService at-least-once. The consumer is idempotent.
@@ -100,31 +116,33 @@ namespace BookstoreService
 
         public async Task Commit(Purchase purchase)
         {
-            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>("bookStore");
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Guid>>("lockedBooks");
+            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Book>>("bookStore");
+            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Guid>>("lockedBooks");
 
             using (var transaction = StateManager.CreateTransaction())
             {
-                ConditionalValue<Book> book = await bookStore.TryGetValueAsync(transaction, purchase.BookName);
-                ConditionalValue<Guid> locked = await lockedResources.TryGetValueAsync(transaction, purchase.Email);
+                ConditionalValue<Book> book = await bookStore.TryGetValueAsync(transaction, purchase.BookId);
+                ConditionalValue<Guid> locked = await lockedResources.TryGetValueAsync(transaction, purchase.BookId);
 
                 var updatedBook = book.Value;
                 updatedBook.Quantity -= purchase.Quantity;
 
-                await bookStore.AddOrUpdateAsync(transaction, updatedBook.BookName, updatedBook, (key, oldValue) => updatedBook); //update 
+                await bookStore.AddOrUpdateAsync(transaction, updatedBook.BookId, updatedBook, (key, oldValue) => updatedBook); //update 
 
                 // outbox: same transaction as the stock update, so a crash cannot lose the sale
                 var outbox = await this.StateManager.GetOrAddAsync<IReliableQueue<SaleEvent>>("salesOutbox");
                 await outbox.EnqueueAsync(transaction, new SaleEvent
                 {
                     PurchaseId = purchase.PurchaseId,
+                    BookId = purchase.BookId,
+                    UserId = purchase.UserId,
                     BookName = purchase.BookName,
                     Quantity = purchase.Quantity,
                     Amount = purchase.AmountOfPurchase,
                     Email = purchase.Email,
                     SoldAtUtc = DateTime.UtcNow
                 });
-                await lockedResources.TryRemoveAsync(transaction, purchase.BookName);  //unlock
+                await lockedResources.TryRemoveAsync(transaction, purchase.BookId);  //unlock
 
                 await transaction.CommitAsync();
 
@@ -133,12 +151,12 @@ namespace BookstoreService
 
         public async Task<bool> PrepareAndLock(Purchase purchase, Guid token)
         {
-            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>("bookStore");
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Guid>>("lockedBooks");
+            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Book>>("bookStore");
+            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Guid>>("lockedBooks");
             using (var tx = this.StateManager.CreateTransaction()) 
             {
-                ConditionalValue<Book> book = await bookStore.TryGetValueAsync(tx, purchase.BookName);
-                ConditionalValue<Guid> lockedResource = await lockedResources.TryGetValueAsync(tx, purchase.BookName);
+                ConditionalValue<Book> book = await bookStore.TryGetValueAsync(tx, purchase.BookId);
+                ConditionalValue<Guid> lockedResource = await lockedResources.TryGetValueAsync(tx, purchase.BookId);
                 if (book.HasValue && purchase.Quantity <=book.Value.Quantity)
                 {
                     //if someone acting with book (resource is locked)
@@ -148,7 +166,7 @@ namespace BookstoreService
                         return false;
                     }
 
-                    await lockedResources.AddAsync(tx, purchase.BookName, token);
+                    await lockedResources.AddAsync(tx, purchase.BookId, token);
                     await tx.CommitAsync();
                     return true;
 
@@ -162,21 +180,21 @@ namespace BookstoreService
 
         public async Task RollBack(Purchase purchase)
         {
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Guid>>("lockedBooks");
+            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Guid>>("lockedBooks");
             using (var transaction = StateManager.CreateTransaction())
             {
-                await lockedResources.TryRemoveAsync(transaction,purchase.BookName);  //unlock
+                await lockedResources.TryRemoveAsync(transaction, purchase.BookId);  //unlock
                 await transaction.CommitAsync();
 
             }
         }
 
-        public async Task<double> GetItemPrice(string bookName)
+        public async Task<double> GetItemPrice(Guid bookId)
         {
-            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>("bookStore");
+            var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Book>>("bookStore");
             using(var tx = this.StateManager.CreateTransaction())
             {
-                ConditionalValue<Book> book = await bookStore.TryGetValueAsync(tx, bookName);
+                ConditionalValue<Book> book = await bookStore.TryGetValueAsync(tx, bookId);
                 if (book.HasValue)
                 {
                     return book.Value.Price;

@@ -5,6 +5,7 @@ function App() {
 
   const firstName = "Dusan";
   const lastName = "Paripovic";
+  const userId = "6ed4b623-212b-4e29-bd75-b4b68a544532"; // Dusan (public.users)
   const email = "example@example.com"
   
   const [quantities, setQuantities] = useState({
@@ -21,9 +22,11 @@ function App() {
     });
   };
 
-  const handleSubmit = async (bookName, price) => {
+  const handleSubmit = async (bookId, bookName, price) => {
     const quantity = quantities[bookName];
     const orderData = {
+      userId,
+      bookId,
       firstName,
       lastName,
       bookName,
@@ -70,7 +73,7 @@ function App() {
             />
           </td>
           <td>
-            <button onClick={() => handleSubmit("Knjiga1", 10.26)}>SUBMIT</button>
+            <button onClick={() => handleSubmit("b0000000-0000-0000-0000-000000000001", "Knjiga1", 10.26)}>SUBMIT</button>
           </td>
         </tr>
         <tr>
@@ -84,7 +87,7 @@ function App() {
             />
           </td>
           <td>
-            <button onClick={() => handleSubmit("Knjiga2", 26.10)}>SUBMIT</button>
+            <button onClick={() => handleSubmit("b0000000-0000-0000-0000-000000000002", "Knjiga2", 26.10)}>SUBMIT</button>
           </td>
         </tr>
         <tr>
@@ -98,7 +101,7 @@ function App() {
             />
           </td>
           <td>
-            <button onClick={() => handleSubmit("Knjiga3", 15.24)}>SUBMIT</button>
+            <button onClick={() => handleSubmit("b0000000-0000-0000-0000-000000000003", "Knjiga3", 15.24)}>SUBMIT</button>
           </td>
         </tr>
       </tbody>

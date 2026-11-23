@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Common;
 using Common.Interfaces;
 using Common.Models;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.ServiceFabric.Data;
 using Microsoft.ServiceFabric.Data.Collections;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
@@ -22,9 +23,23 @@ namespace BankService
     /// </summary>
     internal sealed class BankService : StatefulService,ITransaction,IBankService
     {
+        // Database connection owned by this service instance; available for any later query.
+        // DbContext is not thread-safe: use it from one flow at a time (or create short-lived contexts for concurrent calls).
+        private readonly BankDbContext _db;
+
         public BankService(StatefulServiceContext context)
             : base(context)
-        { }
+        {
+            _db = new BankDbContext(DatabaseSettings.GetConnectionString(context));
+        }
+
+        protected override async Task OnCloseAsync(CancellationToken cancellationToken)
+        {
+            await _db.DisposeAsync();
+            await base.OnCloseAsync(cancellationToken);
+        }
+
+        protected override void OnAbort() => _db.Dispose();
 
         /// <summary>
         /// Optional override to create listeners (e.g., HTTP, Service Remoting, WCF, etc.) for this service replica to handle client or user requests.
@@ -40,67 +55,48 @@ namespace BankService
 
 
 
-        private async Task InitUser()
+        private const int MaxUsersToLoad = 10;
+
+        /// <summary>Loads the first <see cref="MaxUsersToLoad"/> users from Postgres (public.users) into the reliable dictionary.</summary>
+        private async Task InitUser(CancellationToken cancellationToken)
         {
-            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, User>>("users");
+            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, User>>("users");
             int ownIndex = await PartitionHelper.GetOwnPartitionIndexAsync(this.Context);
-            var seed = new[]
-            {
-                new User("Dusan", "Paripovic", 165.18, "example@example.com"),
-                new User("Marko", "Markovic", 200.00, "marko@example.com"),
-                new User("Ana", "Anic", 120.50, "ana@example.com"),
-                new User("Petar", "Petrovic", 300.00, "petar@example.com"),
-            };
+            List<User> usersFromDatabase = await _db.Users
+                .AsNoTracking()
+                .Take(MaxUsersToLoad)
+                .ToListAsync(cancellationToken);
             using (var tx = StateManager.CreateTransaction())
             {
                 // each partition stores only the users whose hash(userId) maps to it
-                foreach (var u in seed.Where(u => PartitionHelper.GetPartitionIndex(u.Email) == ownIndex))
-                    await users.TryAddAsync(tx, u.Email, u);   // TryAdd: safe on failover/restart
+                foreach (var u in usersFromDatabase.Where(u => PartitionHelper.GetPartitionIndex(u.UserId) == ownIndex))
+                    await users.TryAddAsync(tx, u.UserId, u);   // TryAdd: safe on failover/restart
                 await tx.CommitAsync();
             }
         }
 
         /// <summary>
         /// This is the main entry point for your service replica.
-        /// This method executes when this replica of your service becomes primary and has write status.
+        /// Loads the users from Postgres into the reliable dictionary once this replica becomes primary.
         /// </summary>
         /// <param name="cancellationToken">Canceled when Service Fabric needs to shut down this service replica.</param>
-        protected override async Task RunAsync(CancellationToken cancellationToken)
-        {
-            // TODO: Replace the following sample code with your own logic 
-            //       or remove this RunAsync override if it's not needed in your service.
-
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string,Guid>>("lockedUsers");
-            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, User>>("users");
-            await InitUser();
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                using (var tx = this.StateManager.CreateTransaction())
-                {
-                    await tx.CommitAsync();
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            }
-        }
+        protected override Task RunAsync(CancellationToken cancellationToken) => InitUser(cancellationToken);
 
         public async Task Commit(Purchase purchase)
         {
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Guid>>("lockedUsers");
-            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, User>>("users");
+            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Guid>>("lockedUsers");
+            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, User>>("users");
 
             using (var transaction = StateManager.CreateTransaction()) 
             {
-                ConditionalValue<User> user = await users.TryGetValueAsync(transaction, purchase.Email);
-                ConditionalValue<Guid> locked = await lockedResources.TryGetValueAsync(transaction, purchase.Email);    
+                ConditionalValue<User> user = await users.TryGetValueAsync(transaction, purchase.UserId);
+                ConditionalValue<Guid> locked = await lockedResources.TryGetValueAsync(transaction, purchase.UserId);    
                 
                 var updatedUser = user.Value;
                 updatedUser.Balance -= purchase.AmountOfPurchase;
 
-                await users.AddOrUpdateAsync(transaction, updatedUser.Email, updatedUser, (key, oldValue) => updatedUser);
-                await lockedResources.TryRemoveAsync(transaction, purchase.Email);  //unlock
+                await users.AddOrUpdateAsync(transaction, updatedUser.UserId, updatedUser, (key, oldValue) => updatedUser);
+                await lockedResources.TryRemoveAsync(transaction, purchase.UserId);  //unlock
 
                 await transaction.CommitAsync();
 
@@ -109,14 +105,14 @@ namespace BankService
 
         public async Task<bool> PrepareAndLock(Purchase purchase, Guid token)
         {
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Guid>>("lockedUsers");
-            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, User>>("users");
+            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Guid>>("lockedUsers");
+            var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, User>>("users");
 
 
             using (var tx = this.StateManager.CreateTransaction())
             {
-                ConditionalValue<User> user = await users.TryGetValueAsync(tx, purchase.Email);
-                ConditionalValue<Guid> lockedUser = await lockedResources.TryGetValueAsync(tx, purchase.Email);
+                ConditionalValue<User> user = await users.TryGetValueAsync(tx, purchase.UserId);
+                ConditionalValue<Guid> lockedUser = await lockedResources.TryGetValueAsync(tx, purchase.UserId);
                 if (user.HasValue && user.Value.Balance >= purchase.AmountOfPurchase) 
                 {
                     //check is user currently used for some operation
@@ -127,7 +123,7 @@ namespace BankService
                     }
 
                     //lock user 
-                    await lockedResources.AddAsync(tx,purchase.Email,token);
+                    await lockedResources.AddAsync(tx,purchase.UserId,token);
                     await tx.CommitAsync();
                     return true;
                 }
@@ -141,10 +137,10 @@ namespace BankService
 
         public async Task RollBack(Purchase p)
         {
-            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Guid>>("lockedUsers");
+            var lockedResources = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Guid>>("lockedUsers");
             using (var transaction = StateManager.CreateTransaction())
             {
-                await lockedResources.TryRemoveAsync(transaction, p.Email);  //unlock
+                await lockedResources.TryRemoveAsync(transaction, p.UserId);  //unlock
                 await transaction.CommitAsync();
 
             }

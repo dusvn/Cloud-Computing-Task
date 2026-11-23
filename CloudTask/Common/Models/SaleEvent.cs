@@ -4,6 +4,8 @@ namespace Common.Models
     public class SaleEvent
     {
         public Guid PurchaseId { get; set; }
+        public Guid BookId { get; set; }
+        public Guid UserId { get; set; }
         public string BookName { get; set; } = string.Empty;
         public int Quantity { get; set; }
         public double Amount { get; set; }

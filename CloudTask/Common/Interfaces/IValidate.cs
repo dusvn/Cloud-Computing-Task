@@ -5,6 +5,6 @@ namespace Common.Interfaces
 {
     public interface IValidate : IService
     {
-        Task<bool> TransferData(Purchase p);
+        Task<PurchaseResponse> TransferData(Purchase p);
     }
 }

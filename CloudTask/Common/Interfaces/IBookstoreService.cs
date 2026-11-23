@@ -9,6 +9,6 @@ namespace Common.Interfaces
 {
     public interface IBookstoreService : IService
     {
-        public Task<double> GetItemPrice(string bookName);
+        public Task<double> GetItemPrice(Guid bookId);
     }
 }

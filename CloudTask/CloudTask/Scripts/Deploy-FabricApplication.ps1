@@ -110,6 +110,9 @@ Param
     $RegisterApplicationTypeTimeoutSec
 )
 
+# Start the local PostgreSQL database together with the application (idempotent).
+& (Join-Path $PSScriptRoot 'Start-Database.ps1')
+
 function Read-XmlElementAsHashtable
 {
     Param (

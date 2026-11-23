@@ -8,7 +8,9 @@ namespace Common.Models
 {
     public class Purchase
     {
-        private string firstName; //Always Dusan 
+        private Guid userId;
+        private Guid bookId;
+        private string firstName; //Always Dusan
         private string lastName;  //Always Paripovic ,bcs we have only one user this is fixed 
         private string bookName;  
         private int quantity;
@@ -18,8 +20,10 @@ namespace Common.Models
         /// <summary>Set by the orchestrator (= transaction id); used as idempotency key in the report.</summary>
         public Guid PurchaseId { get; set; }
 
-        public Purchase(string firstName, string lastName, string bookName, int quantity, string email)
+        public Purchase(Guid userId, Guid bookId, string firstName, string lastName, string bookName, int quantity, string email)
         {
+            UserId = userId;
+            BookId = bookId;
             FirstName = firstName;
             LastName = lastName;
             BookName = bookName;
@@ -32,6 +36,10 @@ namespace Common.Models
         {
         }
 
+        /// <summary>Selects the Bank partition.</summary>
+        public Guid UserId { get => userId; set => userId = value; }
+        /// <summary>Selects the Bookstore partition.</summary>
+        public Guid BookId { get => bookId; set => bookId = value; }
         public string FirstName { get => firstName; set => firstName = value; }
         public string LastName { get => lastName; set => lastName = value; }
         public string BookName { get => bookName; set => bookName = value; }
