@@ -15,6 +15,9 @@ namespace Common.Models
         private string email;
         private double amountOfPurchase;
 
+        /// <summary>Set by the orchestrator (= transaction id); used as idempotency key in the report.</summary>
+        public Guid PurchaseId { get; set; }
+
         public Purchase(string firstName, string lastName, string bookName, int quantity, string email)
         {
             FirstName = firstName;

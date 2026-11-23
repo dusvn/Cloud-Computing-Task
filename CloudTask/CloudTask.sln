@@ -11,11 +11,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Common", "Common\Common.csp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Client", "Client\Client.csproj", "{E747441A-E7B9-419D-9F50-EEB74A9914C5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TransactionCoordinator", "TransactionCoordinator\TransactionCoordinator.csproj", "{C8C55C50-3CF4-40C3-8A45-A059A78FA08B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PurchaseOrchestrator", "PurchaseOrchestrator\PurchaseOrchestrator.csproj", "{C8C55C50-3CF4-40C3-8A45-A059A78FA08B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BookStore", "BookStore\BookStore.csproj", "{B589A286-8495-4A35-8D78-53079327A53B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BookstoreService", "BookstoreService\BookstoreService.csproj", "{B589A286-8495-4A35-8D78-53079327A53B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bank", "Bank\Bank.csproj", "{410BBC42-8ECB-48D6-B5B7-B8F5605E068D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BankService", "BankService\BankService.csproj", "{410BBC42-8ECB-48D6-B5B7-B8F5605E068D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReportService", "ReportService\ReportService.csproj", "{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -45,6 +47,14 @@ Global
 		{07B48492-9E47-4626-B871-4B06D2B0C06E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{07B48492-9E47-4626-B871-4B06D2B0C06E}.Release|x64.ActiveCfg = Release|Any CPU
 		{07B48492-9E47-4626-B871-4B06D2B0C06E}.Release|x64.Build.0 = Release|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Debug|x64.Build.0 = Debug|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Release|x64.ActiveCfg = Release|Any CPU
+		{5C1A7E32-9B4D-4F6A-8D21-3E7B0A9C4D15}.Release|x64.Build.0 = Release|Any CPU
 		{44084025-94CD-4995-91FB-BFCD44A2355C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{44084025-94CD-4995-91FB-BFCD44A2355C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{44084025-94CD-4995-91FB-BFCD44A2355C}.Debug|x64.ActiveCfg = Debug|Any CPU

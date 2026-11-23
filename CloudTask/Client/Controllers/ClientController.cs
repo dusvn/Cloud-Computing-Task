@@ -9,6 +9,13 @@ namespace Client.Controllers
     [Route("api/[controller]/[action]")]
     public class ClientController : ControllerBase
     {
+        [HttpGet]
+        public async Task<IActionResult> Report()
+        {
+            var sales = await ServiceProxy.Create<IReportService>(new Uri("fabric:/CloudTask/ReportService")).GetSalesReportAsync();
+            return Ok(sales);
+        }
+
         [HttpPost]
         public async Task<IActionResult> Purchase([FromBody]Purchase p)
         {

@@ -20,7 +20,6 @@ namespace Common.Interfaces
         /// <returns></returns>
         Task<bool> PrepareAndLock(Purchase purchase,Guid token);
 
-        Task<bool> UnlockResource(Purchase purchase,Guid token);
         Task RollBack(Purchase p);   
 
     }

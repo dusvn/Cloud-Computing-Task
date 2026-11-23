@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Common;
 using Common.Interfaces;
 using Common.Models;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
@@ -25,22 +26,25 @@ namespace Validator
 
         public async Task<bool> TransferData(Purchase p)
         {
-            bool validate = !string.IsNullOrEmpty(p.BookName) &&
-                            !string.IsNullOrEmpty(p.FirstName) &&
-                            !string.IsNullOrEmpty(p.LastName) &&
-                            p.Quantity > 0 &&
+            bool validate = p != null &&
+                            !string.IsNullOrWhiteSpace(p.BookName) && p.BookName.Length <= 100 &&
+                            !string.IsNullOrWhiteSpace(p.FirstName) && p.FirstName.Length <= 50 &&
+                            !string.IsNullOrWhiteSpace(p.LastName) && p.LastName.Length <= 50 &&
+                            p.Quantity > 0 && p.Quantity <= 1000 &&
                             CheckEmailPattern(p.Email);
             bool purchase = false;
             if (validate)
             {
-                purchase = await ServiceProxy.Create<ICommunicate>(new Uri("fabric:/CloudTask/TransactionCoordinator")).TransferDataAndPurchase(p); //transfer data to coordinator
+                // route to the orchestrator partition owning this client (hash of userId = email)
+                purchase = await ServiceProxy.Create<IPurchaseOrchestrator>(new Uri("fabric:/CloudTask/PurchaseOrchestrator"), PartitionHelper.GetPartitionKey(p.Email.Trim())).TransferDataAndPurchase(p);
             }
             return validate && purchase; 
         }
 
         private bool CheckEmailPattern(string email)
         {
-            return Regex.IsMatch(email, @"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
+            if (string.IsNullOrWhiteSpace(email) || email.Length > 254) return false;
+            return Regex.IsMatch(email.Trim(),@"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
         }
 
 
