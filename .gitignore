@@ -1,0 +1,16 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+packages/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Misc
+*.log
+.env
