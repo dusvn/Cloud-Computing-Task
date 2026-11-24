@@ -8,6 +8,12 @@ namespace Common.Models
         public int StatusCode { get; set; }
         public string Message { get; set; } = string.Empty;
 
+        /// <summary>Id of the distributed transaction that handled (or is handling) the order.</summary>
+        public Guid? TransactionId { get; set; }
+        public Guid? IdempotencyKey { get; set; }
+        /// <summary>True when this answer was served for a repeated request with an already known idempotency key.</summary>
+        public bool IsDuplicate { get; set; }
+
         public bool IsAccepted => StatusCode == 202;
 
         /// <summary>200 - purchase finished successfully.</summary>

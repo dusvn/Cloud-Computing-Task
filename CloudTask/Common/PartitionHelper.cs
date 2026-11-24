@@ -2,45 +2,46 @@ using System.Fabric;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.ServiceFabric.Services.Client;
+using Murmur;
 
 namespace Common
 {
     /// <summary>
-    /// Deterministic routing of a business key (bookId / userId) to one of PartitionCount
-    /// UniformInt64 partitions. Must match PartitionCount in ApplicationManifest.xml.
+    /// Routes a business key (UserId / BookId) to a UniformInt64 Service Fabric partition.
+    /// The key is hashed with MurmurHash3 to a signed 64-bit number; that number is used directly as the
+    /// partition key, so Service Fabric picks the partition whose [LowKey, HighKey] range contains it.
+    /// Works for any PartitionCount configured in ApplicationManifest.xml.
     /// </summary>
     public static class PartitionHelper
     {
-        public const int PartitionCount = 4;
-
-        public static int GetPartitionIndex(string key)
+        // MurmurHash3 x64 128-bit from the "murmurhash" NuGet package; the HashAlgorithm is not thread-safe, so one per call.
+        /// <summary>Signed 64-bit MurmurHash3 (first 8 bytes of the 128-bit hash) of the key (trimmed, lower-case).</summary>
+        public static long GetHashKey(string key)
         {
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(key.Trim().ToLowerInvariant()));
-            return (int)(BitConverter.ToUInt32(hash, 0) % PartitionCount);
+            using HashAlgorithm murmur = MurmurHash.Create128(seed: 0, managed: true, preference: AlgorithmPreference.X64);
+            byte[] hash = murmur.ComputeHash(Encoding.UTF8.GetBytes(key.Trim().ToLowerInvariant()));
+            return BitConverter.ToInt64(hash, 0);
         }
 
-        /// <summary>Low key of the partition range that owns <paramref name="key"/>.</summary>
-        public static long GetPartitionLowKey(string key)
-        {
-            long step = (long)(((decimal)long.MaxValue - long.MinValue + 1) / PartitionCount);
-            return long.MinValue + GetPartitionIndex(key) * step;
-        }
+        // Guid ids: the canonical lower-case text form is hashed, so every service computes the same value.
+        public static long GetHashKey(Guid id) => GetHashKey(id.ToString());
 
-        /// <summary>Index (0..PartitionCount-1) of the partition this replica belongs to.</summary>
-        public static async Task<int> GetOwnPartitionIndexAsync(StatefulServiceContext context)
+        public static ServicePartitionKey GetPartitionKey(Guid id) => new(GetHashKey(id));
+
+        /// <summary>The [LowKey, HighKey] key range of the partition this replica belongs to.</summary>
+        public static async Task<(long LowKey, long HighKey)> GetOwnKeyRangeAsync(StatefulServiceContext context)
         {
             var partitions = await new FabricClient().QueryManager.GetPartitionListAsync(context.ServiceName);
-            var own = partitions.First(x => x.PartitionInformation.Id == context.PartitionId);
-            long low = ((Int64RangePartitionInformation)own.PartitionInformation).LowKey;
-            long step = (long)(((decimal)long.MaxValue - long.MinValue + 1) / PartitionCount);
-            return (int)((low - long.MinValue) / step);
+            var own = partitions.First(p => p.PartitionInformation.Id == context.PartitionId);
+            var range = (Int64RangePartitionInformation)own.PartitionInformation;
+            return (range.LowKey, range.HighKey);
         }
 
-        public static ServicePartitionKey GetPartitionKey(string key) => new ServicePartitionKey(GetPartitionLowKey(key));
-
-        // Guid ids (UserId / BookId): the lower-case canonical text form is hashed, so every service computes the same partition.
-        public static int GetPartitionIndex(Guid id) => GetPartitionIndex(id.ToString());
-
-        public static ServicePartitionKey GetPartitionKey(Guid id) => GetPartitionKey(id.ToString());
+        /// <summary>True when <paramref name="id"/> hashes into <paramref name="range"/> (i.e. the partition owns it).</summary>
+        public static bool IsInRange(Guid id, (long LowKey, long HighKey) range)
+        {
+            long hash = GetHashKey(id);
+            return hash >= range.LowKey && hash <= range.HighKey;
+        }
     }
 }

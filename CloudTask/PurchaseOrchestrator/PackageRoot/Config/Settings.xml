@@ -7,6 +7,11 @@
   <!-- This is used for securing StateManager's replication traffic. -->
   <Section Name="ReplicatorSecurityConfig" />
 
+  <!-- Local Postgres (dev only: credentials in plain text). -->
+  <Section Name="Database">
+    <Parameter Name="ConnectionString" Value="Host=localhost;Port=5432;Database=cloud_computing_task;Username=postgres;Password=postgres" />
+  </Section>
+
   <!-- Add your custom configuration sections and parameters here. -->
   <!--
   <Section Name="MyConfigSection">

@@ -38,6 +38,7 @@
       <ServiceLaunchUrl>http://localhost:{ServicePort}/swagger</ServiceLaunchUrl>
     </ProjectReference>
     <ProjectReference Include="..\PurchaseOrchestrator\PurchaseOrchestrator.csproj" />
+    <ProjectReference Include="..\ReportService\ReportService.csproj" />
     <ProjectReference Include="..\Validator\Validator.csproj" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />

@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Common;
 using Microsoft.ServiceFabric.Services.Remoting.Client;
+using BookstoreService.Database;
 using Common.Interfaces;
 using Common.Models;
 using Microsoft.EntityFrameworkCore;
@@ -24,23 +25,16 @@ namespace BookstoreService
     /// </summary>
     internal sealed class BookstoreService : StatefulService,IService,ITransaction,IBookstoreService
     {
-        // Database connection owned by this service instance; available for any later query.
-        // DbContext is not thread-safe: use it from one flow at a time (or create short-lived contexts for concurrent calls).
-        private readonly BookstoreDbContext _db;
+        private readonly GetBookQueries _get;
+        private readonly PostBookQueries _post;
 
         public BookstoreService(StatefulServiceContext context)
             : base(context)
         {
-            _db = new BookstoreDbContext(DatabaseSettings.GetConnectionString(context));
+            string connectionString = DatabaseSettings.GetConnectionString(context);
+            _get = new GetBookQueries(connectionString);
+            _post = new PostBookQueries(connectionString);
         }
-
-        protected override async Task OnCloseAsync(CancellationToken cancellationToken)
-        {
-            await _db.DisposeAsync();
-            await base.OnCloseAsync(cancellationToken);
-        }
-
-        protected override void OnAbort() => _db.Dispose();
 
         /// <summary>
         /// Optional override to create listeners (e.g., HTTP, Service Remoting, WCF, etc.) for this service replica to handle client or user requests.
@@ -61,15 +55,12 @@ namespace BookstoreService
         public async Task InitBooks(CancellationToken cancellationToken)
         {
             var bookStore = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, Book>>("bookStore");
-            int ownIndex = await PartitionHelper.GetOwnPartitionIndexAsync(this.Context);
-            List<Book> booksFromDatabase = await _db.Books
-                .AsNoTracking()
-                .Take(MaxBooksToLoad)
-                .ToListAsync(cancellationToken);
+            var ownRange = await PartitionHelper.GetOwnKeyRangeAsync(this.Context);
+            List<Book> booksFromDatabase = await _get.GetBooksAsync(MaxBooksToLoad, cancellationToken);
             using (var tx = this.StateManager.CreateTransaction())
             {
-                // each partition stores only the books whose hash(bookId) maps to it
-                foreach (var b in booksFromDatabase.Where(b => PartitionHelper.GetPartitionIndex(b.BookId) == ownIndex))
+                // each partition stores only the books whose MurmurHash3(bookId) falls in its key range
+                foreach (var b in booksFromDatabase.Where(b => PartitionHelper.IsInRange(b.BookId, ownRange)))
                     await bookStore.TryAddAsync(tx, b.BookId, b);   // TryAdd: safe on failover/restart
                 await tx.CommitAsync();
             }
@@ -146,6 +137,20 @@ namespace BookstoreService
 
                 await transaction.CommitAsync();
 
+                await SaveQuantityToDatabaseAsync(updatedBook.BookId, updatedBook.Quantity);
+            }
+        }
+
+        /// <summary>Writes the new stock back to public.books (absolute value, so a retry is harmless).</summary>
+        private async Task SaveQuantityToDatabaseAsync(Guid bookId, int quantity)
+        {
+            try
+            {
+                await _post.UpdateBookQuantityAsync(bookId, quantity);
+            }
+            catch (Exception e)
+            {
+                ServiceEventSource.Current.ServiceMessage(Context, "Saving stock of book {0} to Postgres failed: {1}", bookId, e.Message);
             }
         }
 

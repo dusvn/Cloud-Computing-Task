@@ -14,3 +14,11 @@ build/
 # Misc
 *.log
 .env
+
+# Compiled binaries / debug symbols
+*.dll
+*.exe
+*.pdb
+
+# Service Fabric application package output
+pkg/

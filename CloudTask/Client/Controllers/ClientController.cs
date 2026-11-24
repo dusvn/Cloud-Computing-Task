@@ -16,6 +16,13 @@ namespace Client.Controllers
             return Ok(sales);
         }
 
+        [HttpGet]
+        public async Task<IActionResult> Orders([FromQuery] Guid userId)
+        {
+            var orders = await ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator")).GetOrders(userId);
+            return Ok(orders);
+        }
+
         [HttpPost]
         public async Task<IActionResult> Purchase([FromBody]Purchase p)
         {

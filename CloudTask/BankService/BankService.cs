@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Common;
+using BankService.Database;
 using Common.Interfaces;
 using Common.Models;
 using Microsoft.EntityFrameworkCore;
@@ -23,23 +24,16 @@ namespace BankService
     /// </summary>
     internal sealed class BankService : StatefulService,ITransaction,IBankService
     {
-        // Database connection owned by this service instance; available for any later query.
-        // DbContext is not thread-safe: use it from one flow at a time (or create short-lived contexts for concurrent calls).
-        private readonly BankDbContext _db;
+        private readonly GetUserQueries _get;
+        private readonly PostUserQueries _post;
 
         public BankService(StatefulServiceContext context)
             : base(context)
         {
-            _db = new BankDbContext(DatabaseSettings.GetConnectionString(context));
+            string connectionString = DatabaseSettings.GetConnectionString(context);
+            _get = new GetUserQueries(connectionString);
+            _post = new PostUserQueries(connectionString);
         }
-
-        protected override async Task OnCloseAsync(CancellationToken cancellationToken)
-        {
-            await _db.DisposeAsync();
-            await base.OnCloseAsync(cancellationToken);
-        }
-
-        protected override void OnAbort() => _db.Dispose();
 
         /// <summary>
         /// Optional override to create listeners (e.g., HTTP, Service Remoting, WCF, etc.) for this service replica to handle client or user requests.
@@ -61,15 +55,12 @@ namespace BankService
         private async Task InitUser(CancellationToken cancellationToken)
         {
             var users = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, User>>("users");
-            int ownIndex = await PartitionHelper.GetOwnPartitionIndexAsync(this.Context);
-            List<User> usersFromDatabase = await _db.Users
-                .AsNoTracking()
-                .Take(MaxUsersToLoad)
-                .ToListAsync(cancellationToken);
+            var ownRange = await PartitionHelper.GetOwnKeyRangeAsync(this.Context);
+            List<User> usersFromDatabase = await _get.GetUsersAsync(MaxUsersToLoad, cancellationToken);
             using (var tx = StateManager.CreateTransaction())
             {
-                // each partition stores only the users whose hash(userId) maps to it
-                foreach (var u in usersFromDatabase.Where(u => PartitionHelper.GetPartitionIndex(u.UserId) == ownIndex))
+                // each partition stores only the users whose MurmurHash3(userId) falls in its key range
+                foreach (var u in usersFromDatabase.Where(u => PartitionHelper.IsInRange(u.UserId, ownRange)))
                     await users.TryAddAsync(tx, u.UserId, u);   // TryAdd: safe on failover/restart
                 await tx.CommitAsync();
             }
@@ -100,6 +91,22 @@ namespace BankService
 
                 await transaction.CommitAsync();
 
+                await SaveBalanceToDatabaseAsync(updatedUser.UserId, updatedUser.Balance);
+            }
+        }
+
+        /// <summary>
+        /// Writes the new balance back to public.users. Absolute value (not "balance - x"), so a retry is harmless.
+        /// </summary>
+        private async Task SaveBalanceToDatabaseAsync(Guid userId, double balance)
+        {
+            try
+            {
+                await _post.UpdateUserBalanceAsync(userId, balance);
+            }
+            catch (Exception e)
+            {
+                ServiceEventSource.Current.ServiceMessage(Context, "Saving balance of user {0} to Postgres failed: {1}", userId, e.Message);
             }
         }
 

@@ -12,11 +12,11 @@ namespace Common.Interfaces
     public interface IPurchaseOrchestrator : IService
     {
         /// <summary>
-        /// If Purchase is done on correct way coordinator will return True 
-        /// In other cases False
+        /// Idempotent: the first call with a given <see cref="Purchase.IdempotencyKey"/> runs the purchase,
+        /// every repeated call returns the stored outcome instead of buying again.
         /// </summary>
-        /// <param name="p"></param>
-        /// <returns></returns>
-        Task<bool> TransferDataAndPurchase(Purchase p);
+        Task<PurchaseResponse> TransferDataAndPurchase(Purchase p);
+
+        Task<List<OrderRecord>> GetOrders(Guid userId);
     }
 }

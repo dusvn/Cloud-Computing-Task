@@ -31,11 +31,18 @@ namespace Validator
             PurchaseResponse validation = _purchaseValidator.Validate(p);
             if (!validation.IsAccepted) return validation;   // 400 with reason
 
-            bool purchased = await ForwardToOrchestratorAsync(p);
-            return purchased ? PurchaseResponse.Ok() : PurchaseResponse.Conflict();
+            return await ForwardToOrchestratorAsync(p);
         }
 
-        private static Task<bool> ForwardToOrchestratorAsync(Purchase p)
+        public Task<List<OrderRecord>> GetOrders(Guid userId)
+        {
+            var orchestrator = ServiceProxy.Create<IPurchaseOrchestrator>(
+                new Uri("fabric:/CloudTask/PurchaseOrchestrator"),
+                PartitionHelper.GetPartitionKey(userId));
+            return orchestrator.GetOrders(userId);
+        }
+
+        private static Task<PurchaseResponse> ForwardToOrchestratorAsync(Purchase p)
         {
             // route to the orchestrator partition owning this client (hash of UserId)
             var orchestrator = ServiceProxy.Create<IPurchaseOrchestrator>(

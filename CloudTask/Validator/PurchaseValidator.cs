@@ -32,7 +32,8 @@ namespace Validator
         {
             if (purchase is null) return "Purchase is required.";
 
-            return CheckUserId(purchase.UserId)
+            return CheckIdempotencyKey(purchase.IdempotencyKey)
+                ?? CheckUserId(purchase.UserId)
                 ?? CheckBookId(purchase.BookId)
                 ?? CheckBookName(purchase.BookName)
                 ?? CheckFirstName(purchase.FirstName)
@@ -40,6 +41,8 @@ namespace Validator
                 ?? CheckQuantity(purchase.Quantity)
                 ?? CheckEmail(purchase.Email);
         }
+
+        private string? CheckIdempotencyKey(Guid key) => CheckId(key, "IdempotencyKey");
 
         private string? CheckUserId(Guid userId) => CheckId(userId, "UserId");
 
