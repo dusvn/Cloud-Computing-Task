@@ -20,19 +20,6 @@ in the participants and an **idempotency key** for every order.
 | **ReportService** | stateless | Sales report, fed by the Bookstore outbox |
 | **PostgreSQL** | database `cloud_computing_task` | Tables `users`, `books`, `orders`, `saga_log` |
 
-```mermaid
-flowchart LR
-    FE[React front] -->|POST /api/Client/Purchase<br/>idempotencyKey| C[Client API]
-    C --> V[Validator]
-    V -->|partition = hash of purchase id| O[PurchaseOrchestrator<br/>reliable dict: sagas]
-    O -->|Reserve / Confirm / Release<br/>partition = hash of book id| B[BookstoreService<br/>bookStore, heldStock,<br/>reservations, salesOutbox]
-    O -->|Charge / Refund<br/>partition = hash of user id| K[BankService<br/>users, charges,<br/>balanceOutbox]
-    O -->|saga_log, orders| DB[(PostgreSQL)]
-    B -->|outbox pump: stock| DB
-    B -->|outbox pump: sale| R[ReportService]
-    K -->|outbox pump: balance| DB
-```
-
 Partition keys are MurmurHash3 (64-bit) of the id, used directly as the `UniformInt64` partition key
 (`Common/PartitionHelper.cs`).
 
@@ -50,7 +37,7 @@ the table "current state → command → next state" (`PurchaseOrchestrator/Saga
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Started : new idempotency key
+    [*] --> Started : purchase with idempotency key
     Started --> BookReserved : ReserveBook ok
     Started --> Failed : ReserveBook rejected<br/>(unknown book / no stock)
     BookReserved --> Confirming : ChargeAccount ok
@@ -72,56 +59,6 @@ stateDiagram-v2
 - **Business rejection** (not enough stock or money) is a `StepResult` with `Succeeded = false` → "Rejected" column.
 - **Technical failure** (timeout, failover) is an exception → the same command is retried with backoff
   (2^attempts s, max 30 s). Before the pivot the saga gives up after 5 attempts and compensates.
-
-### Happy path
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant FE as Front
-    participant O as Orchestrator
-    participant LOG as saga_log (Postgres)
-    participant B as Bookstore
-    participant K as Bank
-
-    FE->>O: purchase (idempotencyKey)
-    O->>LOG: Started
-    O->>B: ReserveAsync(txId)
-    B-->>O: ok, amount
-    O->>LOG: BookReserved
-    O->>K: ChargeAsync(txId, amount)
-    Note over K: balance -= amount<br/>+ balanceOutbox (one tx)
-    K-->>O: ok
-    O->>LOG: Confirming
-    O->>B: ConfirmAsync(txId)
-    Note over B: stock -= qty<br/>+ salesOutbox (one tx)
-    B-->>O: ok
-    O->>LOG: Completed
-    O-->>FE: 200 Order successfully created (transactionId)
-```
-
-### Compensation (not enough money)
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant O as Orchestrator
-    participant LOG as saga_log (Postgres)
-    participant B as Bookstore
-    participant K as Bank
-
-    O->>B: ReserveAsync(txId)
-    B-->>O: ok (books held, stock not removed)
-    O->>LOG: BookReserved
-    O->>K: ChargeAsync(txId)
-    K-->>O: rejected: Not enough money
-    O->>LOG: Compensating
-    O->>K: RefundAsync(txId)
-    Note over K: nothing charged → tombstone<br/>(a late Charge does nothing)
-    O->>B: ReleaseAsync(txId)
-    Note over B: held books returned
-    O->>LOG: Compensated
-```
 
 ## Reliability
 
@@ -148,13 +85,13 @@ arrive before the forward step leave a **tombstone**, so a late `Reserve` / `Cha
 
 ### Orchestrator failure
 
-Rule for every step: **write the new state first, then execute the command.**
+Rule for every step: **write the state first, then execute the command.**
 
 1. append a full snapshot of the saga to `public.saga_log` (Postgres, append-only),
 2. commit it to the replicated reliable dictionary `sagas`,
 3. only then call the participant.
 
-On every new primary (start, failover, restart) `RunAsync`:
+Whenever a replica becomes primary (start, failover, restart), `RunAsync`:
 
 1. restores unfinished sagas of its partition from `saga_log` that are missing in `sagas`,
 2. keeps resuming every unfinished saga from its stored state (with backoff).
