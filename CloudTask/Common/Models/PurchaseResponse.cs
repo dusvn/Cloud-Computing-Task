@@ -13,6 +13,8 @@ namespace Common.Models
         public Guid? IdempotencyKey { get; set; }
         /// <summary>True when this answer was served for a repeated request with an already known idempotency key.</summary>
         public bool IsDuplicate { get; set; }
+        /// <summary>Current saga state of the purchase (null when the request never reached the orchestrator).</summary>
+        public SagaState? State { get; set; }
 
         public bool IsAccepted => StatusCode == 202;
 
@@ -24,6 +26,9 @@ namespace Common.Models
 
         /// <summary>400 - request is invalid.</summary>
         public static PurchaseResponse BadRequest(string message) => Create(400, message);
+
+        /// <summary>404 - unknown purchase id.</summary>
+        public static PurchaseResponse NotFound(string message = "Purchase not found.") => Create(404, message);
 
         /// <summary>409 - request was valid but could not be completed (e.g. not enough stock or money).</summary>
         public static PurchaseResponse Conflict(string message = "Purchase could not be completed.") => Create(409, message);

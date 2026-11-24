@@ -6,6 +6,9 @@ namespace Common.Interfaces
     /// <summary>Saga participant. Every command is idempotent by txId: repeating it returns the first outcome.</summary>
     public interface IBankService : IService
     {
+        /// <summary>Users of THIS partition with their current balance.</summary>
+        Task<List<User>> ListClientsAsync();
+
         /// <summary>Takes the amount from the user's balance. Fail = unknown user / not enough money / already refunded (tombstone).</summary>
         Task<StepResult> ChargeAsync(Guid txId, Guid userId, double amount);
 

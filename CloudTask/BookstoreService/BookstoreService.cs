@@ -48,6 +48,25 @@ namespace BookstoreService
             await PumpOutboxAsync(cancellationToken);
         }
 
+        // ---------------- queries ----------------
+
+        public async Task<List<Book>> ListAvailableItemsAsync()
+        {
+            var books = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, Book>>(BooksName);
+            var held = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, int>>(HeldStockName);
+            var result = new List<Book>();
+            using var tx = StateManager.CreateTransaction();
+            var enumerator = (await books.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
+            while (await enumerator.MoveNextAsync(CancellationToken.None))
+            {
+                Book book = enumerator.Current.Value;
+                int available = book.Quantity - (await held.TryGetValueAsync(tx, book.BookId)).Value;
+                if (available > 0)
+                    result.Add(new Book(book.BookId, book.BookName, available, book.Price));
+            }
+            return result;
+        }
+
         // ---------------- saga commands ----------------
 
         public async Task<StepResult> ReserveAsync(Guid txId, Purchase purchase)

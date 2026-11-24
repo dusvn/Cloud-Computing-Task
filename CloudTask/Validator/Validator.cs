@@ -1,13 +1,8 @@
-using System;
-using System.Collections.Generic;
 using System.Fabric;
-using System.Linq;
-using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Common;
 using Common.Interfaces;
 using Common.Models;
+using Microsoft.ServiceFabric.Services.Client;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
 using Microsoft.ServiceFabric.Services.Remoting.Client;
 using Microsoft.ServiceFabric.Services.Remoting.Runtime;
@@ -16,53 +11,68 @@ using Microsoft.ServiceFabric.Services.Runtime;
 namespace Validator
 {
     /// <summary>
-    /// An instance of this class is created for each service instance by the Service Fabric runtime.
+    /// Stateless layer between the HTTP API and the stateful services: validates purchases (400),
+    /// routes single-purchase calls to the orchestrator partition of the purchase id, and does the
+    /// fan-out reads over all partitions of a service.
     /// </summary>
     internal sealed class Validator : StatelessService, IValidate
     {
+        private static readonly Uri OrchestratorUri = new("fabric:/CloudTask/PurchaseOrchestrator");
+        private static readonly Uri BookstoreUri = new("fabric:/CloudTask/BookstoreService");
+        private static readonly Uri BankUri = new("fabric:/CloudTask/BankService");
+
+        private readonly PurchaseValidator _purchaseValidator = new();
+
         public Validator(StatelessServiceContext context)
             : base(context)
         { }
 
-        private readonly PurchaseValidator _purchaseValidator = new();
-
         public async Task<PurchaseResponse> TransferData(Purchase p)
         {
             PurchaseResponse validation = _purchaseValidator.Validate(p);
-            if (!validation.IsAccepted) return validation;   // 400 with reason
+            if (!validation.IsAccepted) return validation;   // 400 with reason, never retried
 
-            return await ForwardToOrchestratorAsync(p);
+            return await Orchestrator(p.IdempotencyKey).StartPurchaseAsync(p);
         }
 
-        private static readonly Uri OrchestratorUri = new("fabric:/CloudTask/PurchaseOrchestrator");
+        public Task<OrderRecord?> GetPurchase(Guid purchaseId) =>
+            Orchestrator(purchaseId).GetPurchaseAsync(purchaseId);
 
-        /// <summary>Orders of one user are spread over all orchestrator partitions (keyed by purchase id): ask each one and merge.</summary>
+        public Task<PurchaseResponse> CancelPurchase(Guid purchaseId) =>
+            Orchestrator(purchaseId).CancelPurchaseAsync(purchaseId);
+
         public async Task<List<OrderRecord>> GetOrders(Guid userId)
         {
-            var partitionKeys = await PartitionHelper.GetAllPartitionKeysAsync(OrchestratorUri);
-            var perPartition = await Task.WhenAll(partitionKeys.Select(key =>
-                ServiceProxy.Create<IPurchaseOrchestrator>(OrchestratorUri, key).GetOrders(userId)));
-            return perPartition.SelectMany(orders => orders).OrderByDescending(o => o.CreatedUtc).ToList();
+            var orders = await FanOutAsync<IPurchaseOrchestrator, OrderRecord>(OrchestratorUri, o => o.GetOrders(userId));
+            return orders.OrderByDescending(o => o.CreatedUtc).ToList();
         }
 
-        private static Task<PurchaseResponse> ForwardToOrchestratorAsync(Purchase p)
+        public async Task<List<Book>> ListAvailableItems()
         {
-            // route by purchase id (= idempotency key): a duplicate request lands on the partition that owns the order
-            var orchestrator = ServiceProxy.Create<IPurchaseOrchestrator>(
-                OrchestratorUri,
-                PartitionHelper.ForPurchase(p.IdempotencyKey));
-            return orchestrator.TransferDataAndPurchase(p);
+            var books = await FanOutAsync<IBookstoreService, Book>(BookstoreUri, b => b.ListAvailableItemsAsync());
+            return books.OrderBy(b => b.BookName).ToList();
         }
 
-
-
-        /// <summary>
-        /// Optional override to create listeners (e.g., TCP, HTTP) for this service replica to handle client or user requests.
-        /// </summary>
-        /// <returns>A collection of listeners.</returns>
-        protected override IEnumerable<ServiceInstanceListener> CreateServiceInstanceListeners()
+        public async Task<List<User>> ListClients()
         {
-            return this.CreateServiceRemotingInstanceListeners();
+            var users = await FanOutAsync<IBankService, User>(BankUri, b => b.ListClientsAsync());
+            return users.OrderBy(u => u.LastName).ThenBy(u => u.FirstName).ToList();
         }
+
+        /// <summary>Route by purchase id (= idempotency key): a repeated request lands on the partition that owns the purchase.</summary>
+        private static IPurchaseOrchestrator Orchestrator(Guid purchaseId) =>
+            ServiceProxy.Create<IPurchaseOrchestrator>(OrchestratorUri, PartitionHelper.ForPurchase(purchaseId));
+
+        /// <summary>Calls every partition of the service in parallel and merges the results.</summary>
+        private static async Task<List<TItem>> FanOutAsync<TService, TItem>(Uri serviceUri, Func<TService, Task<List<TItem>>> call)
+            where TService : Microsoft.ServiceFabric.Services.Remoting.IService
+        {
+            List<ServicePartitionKey> partitionKeys = await PartitionHelper.GetAllPartitionKeysAsync(serviceUri);
+            var perPartition = await Task.WhenAll(partitionKeys.Select(key => call(ServiceProxy.Create<TService>(serviceUri, key))));
+            return perPartition.SelectMany(items => items).ToList();
+        }
+
+        protected override IEnumerable<ServiceInstanceListener> CreateServiceInstanceListeners() =>
+            this.CreateServiceRemotingInstanceListeners();
     }
 }

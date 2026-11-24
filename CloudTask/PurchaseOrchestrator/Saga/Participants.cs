@@ -11,9 +11,9 @@ namespace PurchaseOrchestrator.Saga
         private static readonly Uri BankUri = new("fabric:/CloudTask/BankService");
 
         public static IBookstoreService Bookstore(Guid bookId) =>
-            ServiceProxy.Create<IBookstoreService>(BookstoreUri, PartitionHelper.GetPartitionKey(bookId));
+            ServiceProxy.Create<IBookstoreService>(BookstoreUri, PartitionHelper.ForBook(bookId));
 
         public static IBankService Bank(Guid userId) =>
-            ServiceProxy.Create<IBankService>(BankUri, PartitionHelper.GetPartitionKey(userId));
+            ServiceProxy.Create<IBankService>(BankUri, PartitionHelper.ForAccount(userId));
     }
 }

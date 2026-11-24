@@ -1,4 +1,5 @@
 export const API = "http://localhost:8958/api/Client";
+export const PURCHASES_API = "http://localhost:8958/api/purchases";
 
 // Dusan (public.users) - the only user in this demo
 export const USER = {

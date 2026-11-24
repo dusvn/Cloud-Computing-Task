@@ -77,6 +77,7 @@ namespace Client
                                 builder.WithOrigins("http://localhost:3000")
                                         .AllowAnyHeader()
                                         .AllowAnyMethod()
+                                        .WithExposedHeaders("Location")   // so the front can read where to poll
                                         .AllowCredentials();
 
                                 });

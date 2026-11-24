@@ -6,6 +6,9 @@ namespace Common.Interfaces
     /// <summary>Saga participant. Every command is idempotent by txId: repeating it returns the first outcome.</summary>
     public interface IBookstoreService : IService
     {
+        /// <summary>Books of THIS partition that can still be bought (Quantity = stock minus books held by open reservations).</summary>
+        Task<List<Book>> ListAvailableItemsAsync();
+
         /// <summary>Holds the books for txId (stock is not removed yet). Ok carries the amount; Fail = unknown book / not enough stock.</summary>
         Task<StepResult> ReserveAsync(Guid txId, Purchase purchase);
 

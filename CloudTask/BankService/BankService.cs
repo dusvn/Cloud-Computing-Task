@@ -45,6 +45,19 @@ namespace BankService
             await PumpOutboxAsync(cancellationToken);
         }
 
+        // ---------------- queries ----------------
+
+        public async Task<List<User>> ListClientsAsync()
+        {
+            var users = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, User>>(UsersName);
+            var result = new List<User>();
+            using var tx = StateManager.CreateTransaction();
+            var enumerator = (await users.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
+            while (await enumerator.MoveNextAsync(CancellationToken.None))
+                result.Add(enumerator.Current.Value);
+            return result;
+        }
+
         // ---------------- saga commands ----------------
 
         public async Task<StepResult> ChargeAsync(Guid txId, Guid userId, double amount)

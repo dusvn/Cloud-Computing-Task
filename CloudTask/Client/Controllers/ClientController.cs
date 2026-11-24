@@ -1,15 +1,16 @@
 using Common.Interfaces;
-using Common.Models;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.ServiceFabric.Services.Remoting.Client;
 
 namespace Client.Controllers
 {
+    /// <summary>Read endpoints. Purchases themselves are in <see cref="PurchasesController"/>.</summary>
     [ApiController]
     [Route("api/[controller]/[action]")]
     public class ClientController : ControllerBase
     {
+        private static IValidate Validator => ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator"));
+
         [HttpGet]
         public async Task<IActionResult> Report()
         {
@@ -17,20 +18,16 @@ namespace Client.Controllers
             return Ok(sales);
         }
 
+        /// <summary>Orders of one user (fan-out over all orchestrator partitions).</summary>
         [HttpGet]
-        public async Task<IActionResult> Orders([FromQuery] Guid userId)
-        {
-            var orders = await ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator")).GetOrders(userId);
-            return Ok(orders);
-        }
+        public async Task<IActionResult> Orders([FromQuery] Guid userId) => Ok(await Validator.GetOrders(userId));
 
-        [HttpPost]
-        [EnableRateLimiting(global::Client.Client.PurchaseRateLimitPolicy)]
-        public async Task<IActionResult> Purchase([FromBody]Purchase p)
-        {
-            PurchaseResponse res = await ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator")).TransferData(p);
-            return StatusCode(res.StatusCode, res);
-        }
-        
+        /// <summary>Books that can be bought, with available stock (fan-out over all Bookstore partitions).</summary>
+        [HttpGet]
+        public async Task<IActionResult> Books() => Ok(await Validator.ListAvailableItems());
+
+        /// <summary>Users with their balance (fan-out over all Bank partitions).</summary>
+        [HttpGet]
+        public async Task<IActionResult> Clients() => Ok(await Validator.ListClients());
     }
 }

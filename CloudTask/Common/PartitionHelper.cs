@@ -34,6 +34,12 @@ namespace Common
         /// </summary>
         public static ServicePartitionKey ForPurchase(Guid purchaseId) => GetPartitionKey(purchaseId);
 
+        /// <summary>BookstoreService partition that owns the book.</summary>
+        public static ServicePartitionKey ForBook(Guid bookId) => GetPartitionKey(bookId);
+
+        /// <summary>BankService partition that owns the user's account.</summary>
+        public static ServicePartitionKey ForAccount(Guid userId) => GetPartitionKey(userId);
+
         /// <summary>One key per partition of the service (its LowKey), for fan-out calls to every partition.</summary>
         public static async Task<List<ServicePartitionKey>> GetAllPartitionKeysAsync(Uri serviceName)
         {

@@ -49,12 +49,13 @@ namespace PurchaseOrchestrator
         // ---------------- API ----------------
 
         /// <summary>
-        /// Starts the saga for a new idempotency key and drives it as far as possible.
-        /// A repeated key never starts a second saga: it gets the state of the existing one.
+        /// Stores the saga (Started) and returns 202 at once; the saga runs in the background.
+        /// A repeated key never starts a second saga: it gets the existing purchase.
         /// </summary>
-        public async Task<PurchaseResponse> TransferDataAndPurchase(Purchase p)
+        public async Task<PurchaseResponse> StartPurchaseAsync(Purchase p)
         {
             var sagas = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, OrderRecord>>(SagasName);
+            OrderRecord saga;
 
             using (var tx = StateManager.CreateTransaction())
             {
@@ -64,7 +65,7 @@ namespace PurchaseOrchestrator
                     return ToResponse(existing.Value, isDuplicate: true);
 
                 var now = DateTime.UtcNow;
-                var saga = new OrderRecord
+                saga = new OrderRecord
                 {
                     IdempotencyKey = p.IdempotencyKey,
                     TransactionId = Guid.NewGuid(),
@@ -84,10 +85,42 @@ namespace PurchaseOrchestrator
                 await MirrorOrderAsync(saga);
             }
 
-            await DriveAsync(p.IdempotencyKey);
+            // run the saga in the background; if this replica dies, RunAsync on the next primary continues it
+            _ = Task.Run(() => DriveAsync(saga.IdempotencyKey));
+            return ToResponse(saga, isDuplicate: false);
+        }
 
-            OrderRecord? current = await ReadSagaAsync(p.IdempotencyKey);
-            return ToResponse(current!, isDuplicate: false);
+        public Task<OrderRecord?> GetPurchaseAsync(Guid purchaseId) => ReadSagaAsync(purchaseId);
+
+        /// <summary>
+        /// Cancel by the user. Before the pivot the saga is moved to Compensating (202) and the background
+        /// driver refunds and releases. From Confirming on the purchase can no longer be cancelled (409).
+        /// </summary>
+        public async Task<PurchaseResponse> CancelPurchaseAsync(Guid purchaseId)
+        {
+            while (true)
+            {
+                OrderRecord? saga = await ReadSagaAsync(purchaseId);
+                if (saga is null) return PurchaseResponse.NotFound();
+
+                switch (saga.Status)
+                {
+                    case SagaState.Started:
+                    case SagaState.BookReserved:
+                        // a step that is running right now cannot overwrite this: TryMoveAsync checks the expected state
+                        if (!await TryMoveAsync(saga, SagaState.Compensating, "Cancelled by user."))
+                            continue;   // the saga moved on meanwhile: decide again on its new state
+                        _ = Task.Run(() => DriveAsync(purchaseId));
+                        return Respond(PurchaseResponse.Accepted("Cancellation accepted, purchase is being compensated."), saga);
+
+                    case SagaState.Compensating:
+                    case SagaState.Compensated:
+                        return Respond(PurchaseResponse.Accepted("Purchase is already cancelled."), saga);
+
+                    default:   // Confirming, Completed (after the pivot) or Failed (nothing to cancel)
+                        return Respond(PurchaseResponse.Conflict($"Purchase cannot be cancelled in state {saga.Status}."), saga);
+                }
+            }
         }
 
         public async Task<List<OrderRecord>> GetOrders(Guid userId)
@@ -165,23 +198,24 @@ namespace PurchaseOrchestrator
 
         /// <summary>
         /// Stores the saga in its next state: saga_log row first, then the reliable dictionary.
-        /// Returns false when another driver already moved the saga on (nothing is overwritten then).
+        /// Returns false when someone else (driver / cancel) already moved the saga on: then nothing is written,
+        /// not even the log row, so saga_log never contains a state that was not applied.
         /// </summary>
         private async Task<bool> TryMoveAsync(OrderRecord saga, SagaState next, string message, int attempts = 0)
         {
-            SagaState expected = saga.Status;
-            saga.Status = next;
-            saga.Message = message;
-            saga.Attempts = attempts;
-            saga.UpdatedUtc = DateTime.UtcNow;
-
-            await _logWrite.AppendAsync(saga);   // write-ahead: the log never lags behind the dictionary
-
             var sagas = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, OrderRecord>>(SagasName);
             using (var tx = StateManager.CreateTransaction())
             {
+                // Update lock on the key: check and write happen while nobody else can move this saga
                 var stored = await sagas.TryGetValueAsync(tx, saga.IdempotencyKey, LockMode.Update);
-                if (!stored.HasValue || stored.Value.Status != expected) return false;
+                if (!stored.HasValue || stored.Value.Status != saga.Status) return false;
+
+                saga.Status = next;
+                saga.Message = message;
+                saga.Attempts = attempts;
+                saga.UpdatedUtc = DateTime.UtcNow;
+
+                await _logWrite.AppendAsync(saga);   // write-ahead: the log never lags behind the dictionary
                 await sagas.SetAsync(tx, saga.IdempotencyKey, saga);
                 await tx.CommitAsync();
             }
@@ -271,18 +305,28 @@ namespace PurchaseOrchestrator
 
         // ---------------- helpers ----------------
 
+        /// <summary>
+        /// Answer to POST: always 202 (the purchase exists, follow it with GET /api/purchases/{id});
+        /// the message and State tell where the saga is.
+        /// </summary>
         private static PurchaseResponse ToResponse(OrderRecord saga, bool isDuplicate)
         {
-            PurchaseResponse r = saga.Status switch
+            string message = saga.Status switch
             {
-                SagaState.Completed => PurchaseResponse.Ok(isDuplicate ? "Order is already successfully created." : "Order successfully created."),
-                SagaState.Compensated or SagaState.Failed => PurchaseResponse.Conflict(saga.Message),
-                // saga still running (or waiting for a retry): the order exists, the user must not buy again
-                _ => PurchaseResponse.Accepted("Order is successfully created and is being processed.")
+                SagaState.Completed => "Order is already successfully created.",
+                SagaState.Compensated or SagaState.Failed => saga.Message,
+                _ => "Order is successfully created and is being processed."
             };
+            PurchaseResponse r = Respond(PurchaseResponse.Accepted(message), saga);
+            r.IsDuplicate = isDuplicate;
+            return r;
+        }
+
+        private static PurchaseResponse Respond(PurchaseResponse r, OrderRecord saga)
+        {
             r.TransactionId = saga.TransactionId;
             r.IdempotencyKey = saga.IdempotencyKey;
-            r.IsDuplicate = isDuplicate;
+            r.State = saga.Status;
             return r;
         }
 
