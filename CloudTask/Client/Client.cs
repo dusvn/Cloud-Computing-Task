@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.RateLimiting;
@@ -49,7 +50,10 @@ namespace Client
                                     .UseContentRoot(Directory.GetCurrentDirectory())
                                     .UseServiceFabricIntegration(listener, ServiceFabricIntegrationOptions.None)
                                     .UseUrls(url);
-                        builder.Services.AddControllers(options => options.Filters.Add<TransientErrorFilter>());
+                        builder.Services
+                            .AddControllers(options => options.Filters.Add<TransientErrorFilter>())
+                            // saga states as names ("Completed", "Compensated", ...) instead of numbers
+                            .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
                         // 429: at most PurchasePermitLimit purchase requests per client IP per second
                         builder.Services.AddRateLimiter(options =>
