@@ -28,6 +28,21 @@ namespace Common
 
         public static ServicePartitionKey GetPartitionKey(Guid id) => new(GetHashKey(id));
 
+        /// <summary>
+        /// Orchestrator partition of a purchase. The purchase id IS the idempotency key, so a repeated request
+        /// always reaches the partition that already holds the order, whichever user or client sends it.
+        /// </summary>
+        public static ServicePartitionKey ForPurchase(Guid purchaseId) => GetPartitionKey(purchaseId);
+
+        /// <summary>One key per partition of the service (its LowKey), for fan-out calls to every partition.</summary>
+        public static async Task<List<ServicePartitionKey>> GetAllPartitionKeysAsync(Uri serviceName)
+        {
+            var partitions = await new FabricClient().QueryManager.GetPartitionListAsync(serviceName);
+            return partitions
+                .Select(p => new ServicePartitionKey(((Int64RangePartitionInformation)p.PartitionInformation).LowKey))
+                .ToList();
+        }
+
         /// <summary>The [LowKey, HighKey] key range of the partition this replica belongs to.</summary>
         public static async Task<(long LowKey, long HighKey)> GetOwnKeyRangeAsync(StatefulServiceContext context)
         {

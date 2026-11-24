@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.ServiceFabric.Services.Communication.AspNetCore;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
@@ -19,6 +21,9 @@ namespace Client
     /// </summary>
     internal sealed class Client : StatelessService
     {
+        internal const string PurchaseRateLimitPolicy = "purchase";
+        private const int PurchasePermitLimit = 5;
+
         public Client(StatelessServiceContext context)
             : base(context)
         { }
@@ -44,7 +49,22 @@ namespace Client
                                     .UseContentRoot(Directory.GetCurrentDirectory())
                                     .UseServiceFabricIntegration(listener, ServiceFabricIntegrationOptions.None)
                                     .UseUrls(url);
-                        builder.Services.AddControllers();
+                        builder.Services.AddControllers(options => options.Filters.Add<TransientErrorFilter>());
+
+                        // 429: at most PurchasePermitLimit purchase requests per client IP per second
+                        builder.Services.AddRateLimiter(options =>
+                        {
+                            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                            options.AddPolicy(PurchaseRateLimitPolicy, http =>
+                                RateLimitPartition.GetFixedWindowLimiter(
+                                    http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                                    _ => new FixedWindowRateLimiterOptions
+                                    {
+                                        PermitLimit = PurchasePermitLimit,
+                                        Window = TimeSpan.FromSeconds(1),
+                                        QueueLimit = 0
+                                    }));
+                        });
                         builder.Services.AddEndpointsApiExplorer();
                         builder.Services.AddSwaggerGen();
                           builder.Services.AddCors(options =>
@@ -65,7 +85,8 @@ namespace Client
                         app.UseSwagger();
                         app.UseSwaggerUI();
                         }
-                        app.UseCors("cors");
+                        app.UseCors("cors");          // before the limiter, so a 429 still carries CORS headers
+                        app.UseRateLimiter();
                         app.UseAuthorization();
                         app.MapControllers();
 

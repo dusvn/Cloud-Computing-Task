@@ -1,6 +1,7 @@
 using Common.Interfaces;
 using Common.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.ServiceFabric.Services.Remoting.Client;
 
 namespace Client.Controllers
@@ -24,6 +25,7 @@ namespace Client.Controllers
         }
 
         [HttpPost]
+        [EnableRateLimiting(global::Client.Client.PurchaseRateLimitPolicy)]
         public async Task<IActionResult> Purchase([FromBody]Purchase p)
         {
             PurchaseResponse res = await ServiceProxy.Create<IValidate>(new Uri("fabric:/CloudTask/Validator")).TransferData(p);
